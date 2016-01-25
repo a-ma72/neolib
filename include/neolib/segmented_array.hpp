@@ -83,7 +83,7 @@ namespace neolib
 	public:
 		class iterator : public std::iterator<std::random_access_iterator_tag, value_type, difference_type, pointer, reference>
 		{
-			friend segmented_array;
+			friend class segmented_array;
 			friend class const_iterator;
 		private:
 			typedef std::iterator<std::random_access_iterator_tag, value_type, difference_type, pointer, reference> base;
@@ -191,7 +191,7 @@ namespace neolib
 		};
 		class const_iterator : public std::iterator<std::random_access_iterator_tag, value_type, difference_type, const_pointer, const_reference>
 		{
-			friend segmented_array;
+			friend class segmented_array;
 		private:
 			typedef std::iterator<std::random_access_iterator_tag, value_type, difference_type, const_pointer, const_reference> base;
 
@@ -625,14 +625,26 @@ namespace neolib
 		}
 		node* allocate_node(node* aAfter)
 		{
+#if DONT_HAVE_ALLOCATOR_TRAITS
+			node* newNode = iAllocator.allocate(1);
+#else
 			node* newNode = std::allocator_traits<node_allocator_type>::allocate(iAllocator, 1);
+#endif
 			try
 			{
+#if DONT_HAVE_ALLOCATOR_TRAITS
+				iAllocator.construct(newNode, node());
+#else
 				std::allocator_traits<node_allocator_type>::construct(iAllocator, newNode, node());
+#endif
 			}
 			catch (...)
 			{
+#if DONT_HAVE_ALLOCATOR_TRAITS
+				iAllocator.deallocate(newNode, 1);
+#else
 				std::allocator_traits<node_allocator_type>::deallocate(iAllocator, newNode, 1);
+#endif
 				throw;
 			}
 			if (aAfter == 0)
@@ -668,8 +680,13 @@ namespace neolib
 					base::set_front_node(aNode->next());
 				base::delete_node(aNode);
 			}
+#if DONT_HAVE_ALLOCATOR_TRAITS
+			iAllocator.destroy(aNode);
+			iAllocator.deallocate(aNode, 1);
+#else
 			std::allocator_traits<node_allocator_type>::destroy(iAllocator, aNode);
 			std::allocator_traits<node_allocator_type>::deallocate(iAllocator, aNode, 1);
+#endif
 		}
 
 	private:

@@ -50,7 +50,7 @@ namespace neolib
 	protected:
 		class node
 		{
-			friend array_tree;
+			friend class array_tree;
 
 		public:
 			enum color_e
@@ -184,22 +184,39 @@ namespace neolib
 			iBack(0),
 			iNil(0)
 		{
+#if DONT_HAVE_ALLOCATOR_TRAITS
+            iNil = iAllocator.allocate(1);
+#else
 			iNil = std::allocator_traits<node_allocator_type>::allocate(iAllocator, 1);
+#endif
 			try
 			{
+#if DONT_HAVE_ALLOCATOR_TRAITS
+				iAllocator.construct(iNil, node(node::NIL));
+#else
 				std::allocator_traits<node_allocator_type>::construct(iAllocator, iNil, node(node::NIL));
+#endif
 			}
 			catch (...)
 			{
+#if DONT_HAVE_ALLOCATOR_TRAITS
+				iAllocator.deallocate(iNil, 1);
+#else
 				std::allocator_traits<node_allocator_type>::deallocate(iAllocator, iNil, 1);
+#endif
 				throw;
 			}
 			set_root_node(iNil);
 		}
 		~array_tree()
 		{
+#if DONT_HAVE_ALLOCATOR_TRAITS
+			iAllocator.destroy(iNil);
+			iAllocator.deallocate(iNil, 1);
+#else
 			std::allocator_traits<node_allocator_type>::destroy(iAllocator, iNil);
 			std::allocator_traits<node_allocator_type>::deallocate(iAllocator, iNil, 1);
+#endif
 		}
 
 	public:
