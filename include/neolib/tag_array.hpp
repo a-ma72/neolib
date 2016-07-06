@@ -199,6 +199,9 @@ namespace neolib
 			bool operator==(const iterator& aOther) const { return iContainerPosition == aOther.iContainerPosition; }
 			bool operator!=(const iterator& aOther) const { return iContainerPosition != aOther.iContainerPosition; }
 			bool operator<(const iterator& aOther) const { return iContainerPosition < aOther.iContainerPosition; }
+			bool operator<=(const iterator& aOther) const { return iContainerPosition <= aOther.iContainerPosition; }
+			bool operator>(const iterator& aOther) const { return iContainerPosition > aOther.iContainerPosition; }
+			bool operator>=(const iterator& aOther) const { return iContainerPosition >= aOther.iContainerPosition; }
 
 		private:
 			segment_type& segment() const { return iNode->segment(); }
@@ -318,6 +321,9 @@ namespace neolib
 			bool operator==(const const_iterator& aOther) const { return iContainerPosition == aOther.iContainerPosition; }
 			bool operator!=(const const_iterator& aOther) const { return iContainerPosition != aOther.iContainerPosition; }
 			bool operator<(const const_iterator& aOther) const { return iContainerPosition < aOther.iContainerPosition; }
+			bool operator<=(const const_iterator& aOther) const { return iContainerPosition <= aOther.iContainerPosition; }
+			bool operator>(const const_iterator& aOther) const { return iContainerPosition > aOther.iContainerPosition; }
+			bool operator>=(const const_iterator& aOther) const { return iContainerPosition >= aOther.iContainerPosition; }
 
 		private:
 			segment_type& segment() const { return iNode->segment(); }
@@ -439,6 +445,10 @@ namespace neolib
 			}
 			return iterator(*this, aPosition.iContainerPosition);
 		}
+		void clear()
+		{
+			erase(begin(), end());
+		}
 		void push_front(const tag_type& aTag, const value_type& aValue)
 		{
 			insert(aTag, begin(), aValue);
@@ -506,6 +516,10 @@ namespace neolib
 			base::swap(aOther);
 			std::swap(iSize, aOther.iSize);
 		}
+		const tag_type& tag(const_iterator aWhere) const
+		{
+			return aWhere.segment().tag();
+		}
 
 	private:
 		template <class InputIterator>
@@ -515,6 +529,14 @@ namespace neolib
 			size_type count = std::distance(aFirst, aLast);
 			if (count == 0)
 				return iterator(*this, aPosition.iNode, aPosition.iContainerPosition, aPosition.iSegmentPosition);
+			if (aPosition.iNode != 0 && static_cast<node*>(aPosition.iNode)->segment().tag() != aTag &&
+				aPosition.iNode->previous() != 0 && static_cast<node*>(aPosition.iNode->previous())->segment().tag() == aTag &&
+				static_cast<node*>(aPosition.iNode->previous())->segment().available() >= count &&
+				aPosition.iSegmentPosition == 0)
+			{
+				aPosition.iNode = static_cast<node*>(aPosition.iNode->previous());
+				aPosition.iSegmentPosition = aPosition.iNode->segment().size();
+			}
 			node* before = aPosition.iNode;
 			node* after = aPosition.iNode ? static_cast<node*>(aPosition.iNode->next()) : 0;
 			node* lastNode = aPosition.iNode;
@@ -527,24 +549,18 @@ namespace neolib
 			}
 			else
 			{
+				lastNode = allocate_space(aTag, aPosition, count);
 				if (aPosition.iNode == 0)
 					aPosition = begin();
 				segment_type& segment = aPosition.iNode->segment();
 				typename segment_type::const_iterator tailEnd = segment.end();
-				typename segment_type::const_iterator tailStart = tailEnd - std::min(segment.size() - aPosition.iSegmentPosition, count);
-				lastNode = allocate_space(aTag, aPosition, count, segment.tag() != aTag && tailStart != tailEnd);
+				typename segment_type::const_iterator tailStart = tailEnd - (segment.size() - aPosition.iSegmentPosition);
 				if (tailStart != tailEnd)
 				{
-					typename segment_type::const_iterator tailMid = segment.tag() == aTag ? tailStart : tailEnd - std::min(static_cast<size_type>(tailEnd - tailStart), lastNode->segment().available());
-					lastNode->segment().insert(lastNode->segment().begin(), tailMid, tailEnd);
-					lastNode->set_size(lastNode->size() + (tailEnd - tailMid));
-					if (tailMid != tailStart)
-					{
-						static_cast<node*>(lastNode->previous())->segment().insert(static_cast<node*>(lastNode->previous())->segment().end(), tailStart, tailMid);
-						lastNode->previous()->set_size(lastNode->previous()->size() + (tailMid - tailStart));
-					}
-					segment.erase(tailStart, tailEnd);
+					lastNode->segment().insert(lastNode->segment().begin(), tailStart, tailEnd);
+					lastNode->set_size(lastNode->size() + (tailEnd - tailStart));
 					aPosition.iNode->set_size(aPosition.iNode->size() - (tailEnd - tailStart));
+					segment.erase(tailStart, tailEnd);
 				}
 				for (node* nextNode = segment.tag() == aTag ? aPosition.iNode : static_cast<node*>(aPosition.iNode->next()); count > 0 && nextNode != lastNode; nextNode = static_cast<node*>(nextNode->next()))
 				{
@@ -573,14 +589,18 @@ namespace neolib
 			for (node* newNode = aPosition.iNode;; newNode = static_cast<node*>(newNode->next()))
 			{
 				if (newNode != before && newNode != after)
-				{
 					base::insert_node(newNode, index);
-				}
 				index += newNode->segment().size();
 				if (newNode == lastNode)
 					break;
 			}
-			if (aPosition.iSegmentPosition != aPosition.iNode->segment().size()) // was not end
+			if (aPosition.iNode->segment().empty())
+			{
+				auto insertionPoint = iterator(*this, static_cast<node*>(aPosition.iNode->next()), aPosition.iContainerPosition, 0);
+				free_node(aPosition.iNode);
+				return insertionPoint;
+			}
+			else if (aPosition.iSegmentPosition != aPosition.iNode->segment().size()) // was not end
 				return iterator(*this, aPosition.iNode, aPosition.iContainerPosition, aPosition.iSegmentPosition);
 			else
 				return iterator(*this, static_cast<node*>(aPosition.iNode->next()), aPosition.iContainerPosition, 0);
@@ -603,26 +623,31 @@ namespace neolib
 			aSegmentPosition = aContainerPosition - nodeIndex;
 			return result;
 		}
-		node* allocate_space(const tag_type& aTag, const_iterator aPosition, size_type aCount, bool aExtraLastNode)
+		node* allocate_space(const tag_type& aTag, const_iterator aPosition, size_type aCount)
 		{
 			if (aCount == 0)
 				return aPosition.iNode;
 			if (aPosition.iNode && aPosition.iNode->segment().tag() == aTag)
 				aCount -= std::min(aCount, (aPosition.iNode->segment().available()));
+			if (aCount == 0)
+				return aPosition.iNode;
 			node* lastNode = 0;
-			if (aCount > 0 && aPosition.iNode && aPosition.iNode->next() != 0 && 
-				static_cast<node*>(aPosition.iNode->next())->segment().tag() == aTag && !static_cast<node*>(aPosition.iNode->next())->segment().full())
+			if (aCount > 0 && aPosition.iNode && aPosition.iNode->next() != 0 && aCount <= static_cast<node*>(aPosition.iNode->next())->segment().available() && static_cast<node*>(aPosition.iNode->next())->segment().tag() == aTag)
 			{
-				lastNode = static_cast<node*>(aPosition.iNode->next());
-				aCount -= std::min(aCount, lastNode->segment().available());
+				if (aPosition.iNode->segment().tag() == aTag || aPosition.iSegmentPosition == aPosition.iNode->segment().size())
+				{
+					lastNode = static_cast<node*>(aPosition.iNode->next());
+					aCount -= std::min(aCount, lastNode->segment().available());
+				}
 			}
 			node* nextNode = aPosition.iNode;
 			while (aCount > 0)
 				aCount -= std::min(aCount, (nextNode = allocate_node(aTag, nextNode))->segment().available());
-			if (aPosition.iNode && aPosition.iNode->segment().tag() != aTag && aExtraLastNode)
-			{
-				lastNode = allocate_node(aPosition.iNode->segment().tag(), nextNode);
-			}
+			if (aPosition.iNode == 0)
+				aPosition = begin();
+			segment_type& segment = aPosition.iNode->segment();
+			if (aPosition.iSegmentPosition < segment.size() && (nextNode->segment().available() < segment.size() - aPosition.iSegmentPosition || segment.tag() != aTag))
+				lastNode = allocate_node(segment.tag(), nextNode);
 			return lastNode ? lastNode : nextNode;
 		}
 		node* allocate_node(const tag_type& aTag, node* aAfter)
